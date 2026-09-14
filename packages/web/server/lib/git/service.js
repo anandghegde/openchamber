@@ -925,11 +925,11 @@ const isMissingDirectoryError = (error) => {
   return /directory that does not exist|does not exist|no such file or directory/i.test(text);
 };
 
-const runGitCommand = async (cwd, args) => {
+const runGitCommand = async (cwd, args, envOverrides) => {
   try {
     const { stdout, stderr } = await execFileAsync(getGitBinary(), args, {
       cwd,
-      env: await buildGitEnv(),
+      env: { ...(await buildGitEnv()), ...envOverrides },
       windowsHide: true,
       maxBuffer: 20 * 1024 * 1024,
     });
@@ -963,6 +963,16 @@ const resolveGitCommitFilePath = async (repoRoot, hash, candidates) => {
   }
 
   throw new Error('Invalid file path');
+};
+
+// simple-git 3.36 refuses GIT_EDITOR unless allowUnsafeEditor is enabled, and
+// once an instance has an explicit env it also rejects inherited PAGER or
+// GIT_ASKPASS values. Run editor-free continuation commands directly instead.
+const runGitCommandWithoutEditor = async (cwd, args) => {
+  const result = await runGitCommand(cwd, args, { GIT_EDITOR: 'true' });
+  if (!result.success) {
+    throw new Error(result.message || 'Git command failed');
+  }
 };
 
 const runGitCommandOrThrow = async (cwd, args, fallbackMessage) => {
@@ -5333,11 +5343,10 @@ export async function abortMerge(directory) {
 }
 
 export async function continueRebase(directory) {
-  const { git } = await createRepositoryGitContext(directory);
+  const { git, repoRoot } = await createRepositoryGitContext(directory);
 
   try {
-    // Set GIT_EDITOR to prevent editor prompts
-    await git.env('GIT_EDITOR', 'true').rebase(['--continue']);
+    await runGitCommandWithoutEditor(repoRoot, ['rebase', '--continue']);
     return { success: true, conflict: false };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
@@ -5359,7 +5368,7 @@ export async function continueRebase(directory) {
     if (errorMessage.includes('nothing to commit') || errorMessage.includes('no changes')) {
       // Skip this commit and continue
       try {
-        await git.env('GIT_EDITOR', 'true').rebase(['--skip']);
+        await runGitCommandWithoutEditor(repoRoot, ['rebase', '--skip']);
         return { success: true, conflict: false };
       } catch {
         // If skip also fails, the rebase may be complete
@@ -5388,7 +5397,7 @@ export async function continueMerge(directory) {
 
     // For merge, we commit after resolving conflicts
     // Use --no-edit to use the default merge commit message
-    await git.env('GIT_EDITOR', 'true').commit([], { '--no-edit': null });
+    await git.commit([], { '--no-edit': null });
     return { success: true, conflict: false };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
