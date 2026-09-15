@@ -1650,6 +1650,25 @@ describe.runIf(canRunGit())('continuing a conflicted rebase or merge', () => {
     expect(await continueRebase(tmpDir)).toEqual({ success: false, conflict: true, conflictFiles: ['file.txt'] });
   });
 
+  it('reports a conflict in the next commit after skipping an emptied one', async () => {
+    const { tmpDir, git, filePath } = await createConflictingBranches();
+    // The apply backend stops with "No changes" instead of dropping the commit.
+    await git.addConfig('rebase.backend', 'apply');
+    await git.checkout('feature');
+    await fs.promises.writeFile(filePath, 'feature again\n', 'utf8');
+    await git.add('file.txt');
+    await git.commit('Change file in feature again');
+    await rebase(tmpDir, { onto: 'main' });
+
+    // Resolving to main's content leaves nothing to commit, so the first
+    // commit is skipped and applying the second one conflicts.
+    await fs.promises.writeFile(filePath, 'main\n', 'utf8');
+    await git.add('file.txt');
+
+    expect(await continueRebase(tmpDir)).toEqual({ success: false, conflict: true, conflictFiles: ['file.txt'] });
+    expect((await getStatus(tmpDir)).rebaseInProgress).toBeTruthy();
+  });
+
   it('finishes a merge after the conflict is resolved', async () => {
     const { tmpDir, git, filePath } = await createConflictingBranches();
     expect(await merge(tmpDir, { branch: 'feature' })).toMatchObject({ success: false, conflict: true });

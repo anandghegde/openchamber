@@ -5350,7 +5350,30 @@ export async function continueRebase(directory) {
     return { success: true, conflict: false };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
-    const isConflict = errorMessage.includes('conflict') || 
+
+    // Check for "nothing to commit" which means rebase step is complete. Git's
+    // hints for this case mention resolving conflicts, so check it first.
+    if (errorMessage.includes('nothing to commit') || errorMessage.includes('no changes')) {
+      // Skip this commit and continue
+      try {
+        await runGitCommandWithoutEditor(repoRoot, ['rebase', '--skip']);
+        return { success: true, conflict: false };
+      } catch {
+        // Skipping applies the next commit, which can conflict too
+        const status = await git.status().catch(() => ({ conflicted: [] }));
+        if (status.conflicted && status.conflicted.length > 0) {
+          return {
+            success: false,
+            conflict: true,
+            conflictFiles: status.conflicted
+          };
+        }
+        // If skip also fails, the rebase may be complete
+        return { success: true, conflict: false };
+      }
+    }
+
+    const isConflict = errorMessage.includes('conflict') ||
                        errorMessage.includes('needs merge') ||
                        errorMessage.includes('unmerged') ||
                        errorMessage.includes('fix conflicts');
@@ -5362,18 +5385,6 @@ export async function continueRebase(directory) {
         conflict: true,
         conflictFiles: status.conflicted || []
       };
-    }
-
-    // Check for "nothing to commit" which means rebase step is complete
-    if (errorMessage.includes('nothing to commit') || errorMessage.includes('no changes')) {
-      // Skip this commit and continue
-      try {
-        await runGitCommandWithoutEditor(repoRoot, ['rebase', '--skip']);
-        return { success: true, conflict: false };
-      } catch {
-        // If skip also fails, the rebase may be complete
-        return { success: true, conflict: false };
-      }
     }
 
     console.error('Failed to continue rebase:', error);
@@ -5401,7 +5412,7 @@ export async function continueMerge(directory) {
     return { success: true, conflict: false };
   } catch (error) {
     const errorMessage = String(error?.message || error || '').toLowerCase();
-    const isConflict = errorMessage.includes('conflict') || 
+    const isConflict = errorMessage.includes('conflict') ||
                        errorMessage.includes('needs merge') ||
                        errorMessage.includes('unmerged') ||
                        errorMessage.includes('fix conflicts');
